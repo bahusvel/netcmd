@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-func NewServer(clientConn net.Conn) error {
+func NewServer(clientConn net.Conn, tunnelProvider *func(net.Conn)) error {
 	server, err := yamux.Server(clientConn, nil)
 	if err != nil {
 		return err
@@ -19,17 +19,33 @@ func NewServer(clientConn net.Conn) error {
 	for conn, err = server.Accept(); err == nil; {
 		decoder := gob.NewDecoder(conn)
 		wire := wireCmd{}
-		err = decoder.Decode(&wire)
-
+		var mode wireMode
+		err = decoder.Decode(&mode)
 		if err != nil {
-
 			break
 		}
+
+		if mode == tunnelMode {
+			if tunnelProvider != nil {
+				go (*tunnelProvider)(conn)
+			} else {
+				conn.Close()
+			}
+			continue
+		}
+
+		err = decoder.Decode(&wire)
+		if err != nil {
+			conn.Close()
+			break
+		}
+
 		cmd := exec.Command(wire.Path, wire.Args...)
 		var stdinout io.ReadWriteCloser
 		if wire.Stdin || wire.Stdout {
 			stdinout, err = server.Accept()
 			if err != nil {
+				conn.Close()
 				break
 			}
 			if wire.Stdin {
@@ -42,6 +58,7 @@ func NewServer(clientConn net.Conn) error {
 		if wire.Stderr {
 			cmd.Stderr, err = server.Accept()
 			if err != nil {
+				conn.Close()
 				break
 			}
 		}

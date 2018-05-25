@@ -32,6 +32,13 @@ type Cmd struct {
 	netstderr   io.ReadCloser
 }
 
+type wireMode int
+
+const (
+	tunnelMode wireMode = iota
+	cmdMode             = iota
+)
+
 type wireCmd struct {
 	Path string
 	Args []string
@@ -117,6 +124,25 @@ func (this *Cmd) Start() (err error) {
 	return
 }
 
+func (this *Client) OpenTunnel() (net.Conn, error) {
+	this.cmdMutex.Lock()
+	defer this.cmdMutex.Unlock()
+
+	session, err := this.session.Open()
+	if err != nil {
+		return nil, err
+	}
+	encoder := gob.NewEncoder(session)
+
+	err = encoder.Encode(tunnelMode)
+	if err != nil {
+		session.Close()
+		return nil, err
+	}
+
+	return session, nil
+}
+
 func (this *Cmd) exec() (err error) {
 	this.client.cmdMutex.Lock()
 	defer this.client.cmdMutex.Unlock()
@@ -126,6 +152,7 @@ func (this *Cmd) exec() (err error) {
 		return
 	}
 	encoder := gob.NewEncoder(this.status)
+
 	wire := wireCmd{
 		Path:   this.Path,
 		Args:   this.Args,
@@ -134,14 +161,22 @@ func (this *Cmd) exec() (err error) {
 		Stderr: this.Stderr != nil,
 	}
 
+	err = encoder.Encode(cmdMode)
+	if err != nil {
+		this.status.Close()
+		return
+	}
+
 	err = encoder.Encode(wire)
 	if err != nil {
+		this.status.Close()
 		return
 	}
 
 	if this.Stdin != nil || this.Stdout != nil {
 		this.netstdinout, err = this.client.session.Open()
 		if err != nil {
+			this.status.Close()
 			return
 		}
 	}
@@ -154,6 +189,7 @@ func (this *Cmd) exec() (err error) {
 	if this.Stderr != nil {
 		this.netstderr, err = this.client.session.Open()
 		if err != nil {
+			this.status.Close()
 			return
 		}
 		go io.Copy(this.Stderr, this.netstderr)

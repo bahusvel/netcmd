@@ -9,7 +9,7 @@ import (
 func TestSimpleCall(t *testing.T) {
 	s, c := net.Pipe()
 	go func() {
-		err := NewServer(s)
+		err := NewServer(s, nil)
 		if err != nil {
 			log.Println(err)
 		}
